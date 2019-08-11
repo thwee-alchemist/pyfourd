@@ -1,7 +1,4 @@
-.ipynb_checkpoints/Untitled-checkpoint.ipynb
-.ipynb_checkpoints/pyfourd-checkpoint.py
-
+.ipynb_checkpoints/*
 pycache__/pyfourd.cpython-37.pyc
-
 pyfourd.pyc
 

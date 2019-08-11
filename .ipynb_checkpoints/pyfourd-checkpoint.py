@@ -51,15 +51,17 @@ class Cube(object):
 
 
 class Connection(object):
-    def __init__(self, start, end, color):
+    def __init__(self, start, end, color='darkred', lineWidth=1.0):
         self.start = start
         self.end = end
         self.color = color
+        self.lineWidth = lineWidth
         self.object = self.draw()
+        
         
     def draw(self):
         self.geometry = Geometry(vertices=[self.start, self.end], colors=[self.color])
-        self.material = LineBasicMaterial(lineWidth=1, color=self.color)
+        self.material = LineBasicMaterial(lineWidth=self.lineWidth, color=self.color)
         self.line = Line(geometry=self.geometry, material=self.material, type="LinePieces")
         
         return Object3D(children=[
@@ -71,32 +73,33 @@ class Connection(object):
 
 class Settings:
     def __init__(self):
-        self.repulsion = 1e-2
-        self.epsilon = 1e-6
-        self.attraction = 1e-2
-        self.inner_distance = 1e1
-
+        self.attraction = 0.10
+        self.repulsion = 0.35
+        self.inner_distance = 1.0
+        self.epsilon = 0.001
+        self.friction = 0.65
 
 settings = Settings()
 
 
-
-
 class Vertex(Cube):
-    def __init__(self, id, color="cornflowerblue", size=0.1):
+    def __init__(self, graph, id, color="cornflowerblue", size=0.5):
         super().__init__(color, [random(), random(), random()], size)
         self.id = id
         self.velocity = list([0.0, 0.0, 0.0])
         self.edges = set([])
+        self.graph = graph
         
     def add_edge(self, edge):
         self.edges.add(edge)
-        edge.source.add_edge(edge)
-        edge.target.add_edge(edge)
+        
+    def remove_edge(self, edge):
+        self.edges.remove(edge)
         
     def move(self, velocity):
         super().move(velocity)
         for edge in self.edges:
+            edge = self.graph.E[edge]
             if edge.source == self:
                 edge.geometry.vertices[0] = self.object.position         
                 
@@ -114,47 +117,48 @@ class Vertex(Cube):
         force = list(np.multiply(
             np.multiply(diff, abs_diff),
             np.divide(
-                settings.repulsion, 
-                (np.multiply((settings.epsilon + abs_diff), (settings.epsilon + abs_diff)))
+                self.graph.settings.repulsion, 
+                np.multiply((self.graph.settings.epsilon + abs_diff), (self.graph.settings.epsilon + abs_diff))
             )
         ))
         
-        self.accelerate(force)
-        other.accelerate(np.negative(force))
+        # self.accelerate(force)
+        # other.accelerate(np.negative(force))
         
         return force
-    
-    
 
 class Edge(Connection):
-    def __init__(self, id, source, target, options={'strength': 1.0, 'color': 'darkorange', 'lineWidth': 1.0}):
-        
+    def __init__(self, graph, id, source, target, strength=1.0, color='darkorange', lineWidth=1.0):
         super().__init__(
             source.object.position, 
-            target.object.position, 
-            options['color']
+            target.object.position,
+            color=color,
+            lineWidth=lineWidth
         )
+        
+        self.graph = graph
         
         self.id = id
         self.source = source
         self.target = target
         
-        self.options = options
+        self.options = {'strength': strength, 'color': color}
     
     def attract(self):
         diff = np.subtract(self.source.object.position, self.target.object.position)
-        force = np.multiply(diff, np.negative(settings.attraction))
+        force = np.multiply(diff, np.negative(self.graph.settings.attraction))
         force = np.multiply(force, self.options['strength'])
         
-        self.source.accelerate(force)
-        self.target.accelerate(np.negative(force))
+        # self.source.accelerate(force)
+        # self.target.accelerate(np.negative(force))
         
+        return force
+    
+    def update(self):
         self.geometry.vertices = [self.source.object.position, self.target.object.position]
         
         self.line.geometry.verticesNeedUpdate = True
         self.line.matrixWorldNeedsUpdate = True
-        
-        return force
 
 
 class BarnesHutTree(object):
@@ -215,17 +219,21 @@ class BarnesHutTree(object):
         return x + y + z
     
     def estimate(self, vertex):
+        f = [0.0, 0.0, 0.0]
+        
         if vertex in self.inners:
             for v in self.inners:
                 if v is not vertex:
-                    f = vertex.repel(v)
+                    f = np.add(f, vertex.repel(v))
         else:
             for tree in self.outers.values():
-                tree.estimate(vertex)
+                f = np.add(f, tree.estimate(vertex))
 
-
+        return f
+                
 class Graph(object):
-    def __init__(self, scene, options={'width': 970, 'height': 600, 'background': 'black'}):
+    def __init__(self, settings, scene, options={'width': 970, 'height': 600, 'background': 'black'}):
+        self.settings = settings
         self.scene = scene
         
         self.V = {}
@@ -237,37 +245,48 @@ class Graph(object):
         self.lock = threading.Lock()
     
     # rename to vertex(id, **options): create if not exists, update otherwise
-    def add_vertex(self, id, options={'color': 'darkblue', 'size': 10}):
+    def add_vertex(self, id, color='darkblue', size=0.5):
         self.lock.acquire() # these are a candidate for decorators
-        self.V[id] = Vertex(id, **options)
+        self.V[id] = Vertex(self, id, color=color, size=size)
         self.lock.release()
         
         self.scene.add(self.V[id].object)
         return id
         
     # same for this one
-    def add_edge(self, id, source_id, target_id, options={'strength': 1.0}):
+    def add_edge(self, id, source_id, target_id, strength=1.0, color='darkred', lineWidth=1.0):
         self.lock.acquire()
         
-        self.E[id] = Edge(id, self.V[source_id], self.V[target_id], options=options)
+        self.E[id] = Edge(self, id, self.V[source_id], self.V[target_id], strength=strength, color=color, lineWidth=lineWidth)
         self.scene.add(self.E[id].object)
+        self.E[id].source.edges.add(id)
+        self.E[id].target.edges.add(id)
         
         self.lock.release()
         return id
         
     def remove_vertex(self, id):
         self.lock.acquire()
-        for e in self.E.values():
-            if e.source.id == id or e.target.id == id:
-                self.remove(e)
+        edges = self.V[id].edges.copy()
+        for edge in edges:
+            self.scene.remove(self.E[edge].object)
+            self.E[edge].source.edges.remove(edge)
+            self.E[edge].target.edges.remove(edge)
+            
+            del self.E[edge]
                 
-        self.scene.remove(self.V[id].line)
+        self.scene.remove(self.V[id].object)
         del self.V[id]
         self.lock.release()
         
     def remove_edge(self, id):
         self.lock.acquire()
-        self.scene.remove(self.E[id].object)
+        
+        edge = id
+        self.scene.remove(self.E[edge].object)
+        self.E[edge].source.edges.remove(edge)
+        self.E[edge].target.edges.remove(edge)
+        
         del self.E[id]
         self.lock.release()
         
@@ -282,30 +301,65 @@ class Graph(object):
             for vertex in self.V.values():
                 tree.insert(vertex)
                 
+            forces = dict()
+            
+            for id in self.V.keys():
+                forces[id] = [0.0, 0.0, 0.0]
+            
+            
             for vertex in self.V.values():
-                tree.estimate(vertex)
+                vertex.visited = set([])
             
-            for e in self.E.values():
-                e.attract()
+            for vertex in self.V.values():
+                # estimate = tree.estimate(vertex)
+                # forces[vertex.id] = estimate
                 
-            self.lock.release()
-            time.sleep(0.0125)
+                for other in self.V.values():
+                    if other.id is not vertex.id and other.id not in vertex.visited:
+                        force = vertex.repel(other)
+                        forces[vertex.id] = np.add(forces[vertex.id], force)
+                        forces[other.id] = np.add(forces[other.id], np.negative(force))
+                        
+                        vertex.visited.add(other.id)
+                        other.visited.add(vertex.id)
             
-
-class FourD(object):
-    def __init__(self):
-        self.scene = self.createScene()
-        self.graph = Graph(scene)
+            for edge in self.E.values():
+                attraction = edge.attract()
+                forces[edge.source.id] = np.add(forces[edge.source.id], attraction)
+                forces[edge.target.id] = np.subtract(forces[edge.target.id], attraction)
+                
+            
+            for vertex in self.V.values():
+                friction = np.multiply(forces[vertex.id], settings.friction)
+                force = np.subtract(forces[vertex.id], friction)
+                vertex.accelerate(force)
+                
+            for edge in self.E.values():
+                edge.update()
+            
+            self.lock.release()
+            time.sleep(0.03)
+            
+            
+class FourD:
+    def __init__(self, settings = Settings(), background="black"):
+        self.settings = settings
+        self.scene = self.createScene(background=background)
+        self.graph = Graph(self.settings, self.scene)
+        
+    def start(self):
         self.graph.layout()
+        return display(self.renderer)
     
-    def createScene(self, width=960, height=600, background='white'):
-
+    def createScene(self, width=960, height=600, background='black'):
         camera = PerspectiveCamera( position=[10, 6, 10], aspect=width/height )
         key_light = DirectionalLight(position=[0, 10, 10])
         ambient_light = AmbientLight()
 
-        scene = Scene(children=[camera, key_light, ambient_light], background='white')
+        scene = Scene(children=[camera, key_light, ambient_light], background=background)
         controller = OrbitControls(controlling=camera)
-        renderer = Renderer(camera=camera, scene=scene, controls=[controller], width=width, height=height)
+        self.renderer = Renderer(camera=camera, scene=scene, controls=[controller], width=width, height=height)
 
         self.scene = scene
+        return scene
+

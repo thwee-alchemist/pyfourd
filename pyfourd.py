@@ -55,11 +55,13 @@ class Connection(object):
         self.start = start
         self.end = end
         self.color = color
+        self.lineWidth = lineWidth
         self.object = self.draw()
+        
         
     def draw(self):
         self.geometry = Geometry(vertices=[self.start, self.end], colors=[self.color])
-        self.material = LineBasicMaterial(lineWidth=1, color=self.color)
+        self.material = LineBasicMaterial(lineWidth=self.lineWidth, color=self.color)
         self.line = Line(geometry=self.geometry, material=self.material, type="LinePieces")
         
         return Object3D(children=[
@@ -71,11 +73,11 @@ class Connection(object):
 
 class Settings:
     def __init__(self):
-        self.repulsion = 1e-2
-        self.epsilon = 1e-6
-        self.attraction = 1e-2
-        self.inner_distance = 1e1
-        self.friction = 0.75
+        self.attraction = 0.10
+        self.repulsion = 0.35
+        self.inner_distance = 1.0
+        self.epsilon = 0.001
+        self.friction = 0.65
 
 settings = Settings()
 
@@ -304,20 +306,28 @@ class Graph(object):
             for id in self.V.keys():
                 forces[id] = [0.0, 0.0, 0.0]
             
+            
+            for vertex in self.V.values():
+                vertex.visited = set([])
+            
             for vertex in self.V.values():
                 # estimate = tree.estimate(vertex)
                 # forces[vertex.id] = estimate
                 
                 for other in self.V.values():
-                    if other.id is not vertex.id:
+                    if other.id is not vertex.id and other.id not in vertex.visited:
                         force = vertex.repel(other)
                         forces[vertex.id] = np.add(forces[vertex.id], force)
                         forces[other.id] = np.add(forces[other.id], np.negative(force))
+                        
+                        vertex.visited.add(other.id)
+                        other.visited.add(vertex.id)
             
-            for e in self.E.values():
-                attraction = e.attract()
-                forces[e.source.id] = np.add(forces[e.source.id], attraction)
-                forces[e.target.id] = np.subtract(forces[e.target.id], attraction)
+            for edge in self.E.values():
+                attraction = edge.attract()
+                forces[edge.source.id] = np.add(forces[edge.source.id], attraction)
+                forces[edge.target.id] = np.subtract(forces[edge.target.id], attraction)
+                
             
             for vertex in self.V.values():
                 friction = np.multiply(forces[vertex.id], settings.friction)
@@ -332,9 +342,9 @@ class Graph(object):
             
             
 class FourD:
-    def __init__(self, settings = Settings()):
+    def __init__(self, settings = Settings(), background="black"):
         self.settings = settings
-        self.scene = self.createScene()
+        self.scene = self.createScene(background=background)
         self.graph = Graph(self.settings, self.scene)
         
     def start(self):
